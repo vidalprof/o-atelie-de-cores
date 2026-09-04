@@ -205,7 +205,12 @@ h1{font-size:clamp(22px,6.4vw,34px);font-weight:700;color:#fff;margin:6px auto 2
   display:-webkit-box;display:flex;-webkit-box-orient:vertical;-webkit-flex-direction:column;flex-direction:column;-webkit-box-align:center;align-items:center;-webkit-box-shadow:0 6px 14px rgba(30,50,20,.16);box-shadow:0 6px 14px rgba(30,50,20,.16)}
 .carta:active{-webkit-transform:scale(.97);transform:scale(.97)}
 .carta img{width:76px;height:76px;object-fit:contain}
-.carta .lab{font-size:13px;font-weight:700;margin-top:2px;color:var(--texto)}
+.carta .lab{font-size:13px;font-weight:700;margin-top:2px;color:#221a12}  /* ⚠️ tinta PRÓPRIA, não `var(--texto)`: a carta tem fundo claro dela
+     (`rgba(255,253,246,.95)`, e `#eafce0`/`#ffece9` quando acerta/erra),
+     enquanto `--texto` é a tinta do FUNDO DA ATIVIDADE. Numa atividade de
+     fundo escuro isso dava letra clara sobre cartão branco — o rótulo da
+     carta sumia. Achado pelo `_qa/cor_fixa.py`, que existia e nunca era
+     chamado pela banca. */
 .carta .num{position:absolute;top:-8px;right:-8px;width:28px;height:28px;border-radius:50%;background:var(--verde);color:#fff;font-weight:700;font-size:16px;line-height:28px;-webkit-box-shadow:0 2px 5px rgba(0,0,0,.25);box-shadow:0 2px 5px rgba(0,0,0,.25)}
 .carta.ok{border-color:var(--verde);background:#eafce0}
 .carta.no{border-color:var(--coral);background:#ffece9;-webkit-animation:shk .4s;animation:shk .4s}
@@ -944,6 +949,17 @@ h1{font-size:clamp(22px,6.4vw,34px);font-weight:700;color:#fff;margin:6px auto 2
   .mec-pintar-canvas .pintawrap{max-width:min(320px,40vh)}
   .mec-pintar-canvas .tcor{width:40px;height:40px;margin:2px}
 }
+/* ⭐ NO NETBOOK DA ESCOLA (largo e baixo) a paleta virou coluna fixa à esquerda
+   — ver o `pecas.css` da peça pintar-canvas — e os ~90px que ela ocupava embaixo
+   voltaram para a altura. Então o desenho cresce de volta aqui. Medido em
+   1024x600: com 47vh a fase mais alta punha o "Pronto!" em 508-558 e a barra
+   fixa começa em 546 — ENCOSTAVA. O portão não acusou porque o `.mini` não
+   cai exatamente no centro do botão, e é justo por isso que a foto e a medida
+   da FASE MAIS ALTA valem tanto quanto o portão. Com 43vh a fase mais alta
+   termina em 532 e sobra folga de verdade. */
+@media (min-width:820px) and (max-height:660px){
+  .mec-pintar-canvas .pintawrap{max-width:min(420px,58vh)}
+}
 
 </style></head>
 <body>
@@ -975,7 +991,57 @@ var ID = {"pre": "co", "mascote": "guia", "mascoteNome": "Rai", "titulo": "O Ate
    mascote alheio aparecer no texto desta.                            */
 var TIPO_ATIVIDADE="criativa"; var MASCOTE_NOME="Rai";  /* ID.mascoteNome */
 var IMGS=[];
-var IMG={};function precarrega(){var i;for(i=0;i<IMGS.length;i++){var im=new Image();im.src="img/"+IMGS[i]+".png";IMG[IMGS[i]]=im;}}
+/* ⚠️ DECLARADO AQUI, preenchido pelo montador (igual ao `IMGS` e ao `VOZOK`).
+   Sem esta linha o ESLint do portao pre-entrega acusa `AUDIOS is not defined`
+   em TODA atividade e **nada e publicado** — foi o que aconteceu hoje: quatro
+   entregas seguidas falharam em 55s e eu levei horas para ir ver o log. */
+var AUDIOS=[];
+var IMG={};function precarrega(){var i;for(i=0;i<IMGS.length;i++){var im=new Image();im.src="img/"+IMGS[i]+".png";IMG[IMGS[i]]=im;}precarregaVoz();}
+/* ⭐⭐ A VOZ CHEGA ANTES DA CRIANÇA — pré-carga em segundo plano.
+
+   ⚠️ LIÇÃO PAGA (set/2026), e quem pegou foi o Marcos com a turma jogando:
+   *"atividade oficina das palavras travando na fase 13"* e, quando pedi para
+   ele descrever, o retrato exato do defeito: *"o estudante acerta, e fica
+   parado esperando o botão continuar"*.
+
+   Não era o código: era a REDE. O `escolher` — a mecânica mais usada da casa —
+   só mostra o botão quando a voz da resposta termina, e tem uma rede de
+   segurança de 4 SEGUNDOS para o caso de o mp3 não chegar. Na escola ele não
+   chega na hora: cada mp3 é uma ida à rede na PRIMEIRA vez que toca. Então a
+   criança acerta, e espera a rede de olho na tela parada.
+
+   O `sw.js` já é cache-primeiro no áudio — mas cache-primeiro só ajuda da
+   SEGUNDA vez. Numa atividade de 400 falas, a primeira vez acontece 400 vezes.
+
+   Aqui a voz vem antes: enquanto a criança lê a capa e escolhe o crachá, o
+   motor busca as falas caladas, de 4 em 4, e o service worker guarda cada uma.
+   Quando ela chega na fase, o mp3 já é local e o botão aparece na hora.
+
+   ⚠️ REGRAS DESTA PRÉ-CARGA, todas por um motivo:
+     · `fetch`, não `new Audio()`: baixa e guarda sem ocupar canal de som nem
+       disparar autoplay (que o navegador bloqueia antes do 1º gesto);
+     · de 4 em 4, com respiro: 400 pedidos de uma vez afogam a rede da escola e
+       atrasariam justamente a fala da PRIMEIRA fase;
+     · a fala da abertura e as das primeiras fases vêm primeiro (a ordem do
+       `falas.json` já é a ordem do jogo);
+     · `catch` vazio em tudo: pré-carga que falha não pode quebrar a atividade —
+       sem ela o app volta a funcionar como funcionava, só mais devagar. */
+var _pvOk=0;
+function precarregaVoz(){
+  if(_pvOk||typeof AUDIOS==="undefined"||!AUDIOS||!AUDIOS.length||!window.fetch) return;
+  _pvOk=1;
+  var i=0, LOTE=4;
+  function passo(){
+    if(i>=AUDIOS.length) return;
+    var lote=[],n;
+    for(n=0;n<LOTE&&i<AUDIOS.length;n++,i++){
+      try{ lote.push(fetch("audio/"+AUDIOS[i]+".mp3",{cache:"force-cache"})["catch"](function(){})); }catch(e){}
+    }
+    try{ Promise.all(lote).then(function(){ setTimeout(passo,120); })["catch"](function(){ setTimeout(passo,300); }); }
+    catch(e){ setTimeout(passo,300); }
+  }
+  setTimeout(passo,400);   /* deixa a capa desenhar primeiro */
+}
 function imgEl(nome,cls){var e=document.createElement("img");if(cls)e.className=cls;e.src="img/"+nome+".png";e.alt="";e.draggable=false;return e;}
 /* ============ SOM (efeitos) ============ */
 /* ⚠️⚠️ LICAO PAGA (Marcos, ago/2026: "algumas máquinas às vezes ALEATORIAMENTE
@@ -1050,7 +1116,32 @@ function _flutua(txt){
   }catch(e){}
 }
 /* acerto: som (3 notas) + pulso háptico curto + "Boa!" subindo — os três juntos */
-function sCerto(){ tom(659,0.12,"sine",0.2); tom(880,0.14,"sine",0.2,0.09); tom(1318,0.22,"sine",0.18,0.18); vibra(32); _flutua(_elogioCurto()); }
+/* ⭐⭐ RELÓGIO DA ESPERA — a instrumentação que substitui o palpite (set/2026).
+
+   Cobrança do Marcos: *"vc percebe que é sempre remendo"*, *"não se pode
+   inventar, palpite, etc, tem que ser algo profissional"*. Ele estava certo, e
+   eu tinha acabado de provar isso sozinho: tentei DUAS medidas de fora, olhando
+   a tela mudar com o processador freado, e as duas deram igual na versão com
+   defeito e na consertada. Medir o defeito espiando a tela é adivinhação.
+
+   Aqui o motor MARCA os dois instantes que importam, e a suíte só lê:
+     · `acertou`  — a criança fez certo (todo pedaço da casa toca `sCerto()`);
+     · `tela`     — a tela lhe deu algo novo (`limpa()`, entre itens);
+     · `botao`    — o botão de seguir apareceu (`mostraBanner()`).
+   A espera é a diferença. É exata, não estimada.
+
+   ⚠️ CUSTO ZERO PARA A CRIANÇA: só grava quando `window.__QAON` existe, e quem
+   liga isso é a suíte de teste. No app publicado o `if` é falso e acabou. */
+function __qa(tipo){ if(window.__QAON){ var f=(typeof IFASE==="number"&&typeof FASES!=="undefined"&&FASES[IFASE])?FASES[IFASE]:null;
+  (window.__QA=window.__QA||[]).push({t:Date.now(),tipo:tipo,
+    fase:(typeof IFASE==="number"?IFASE+1:0), mec:(f&&f.mec)||"?"}); } }
+/* ⚠️ `sTira` — o som de TIRAR uma peça (fileira, volta, contador). Estava
+   definido DENTRO de algumas peças e não de outras: o `arranjo` e o `resto`
+   CHAMAVAM sem definir, e como cada peça vive no seu fechamento, dava
+   `sTira is not defined` na mão da criança — calado, só ao tirar uma peça.
+   Som usado por várias mecânicas mora no motor, como o `nota` e o `confete`. */
+function sTira(){ tom(392,0.07,"triangle",0.12); tom(294,0.09,"triangle",0.11,0.05); }
+function sCerto(){ __qa("acertou"); tom(659,0.12,"sine",0.2); tom(880,0.14,"sine",0.2,0.09); tom(1318,0.22,"sine",0.18,0.18); vibra(32); _flutua(_elogioCurto()); }
 /* erro: som grave + pulso háptico DUPLO e leve (não pune) — sem texto (a ajuda
    escrita/dita é que responde ao erro; um "errou!" flutuante seria castigo). */
 function sErro(){ tom(200,0.18,"sawtooth",0.12); tom(150,0.24,"sawtooth",0.12,0.08); vibra([14,46,14]); }
@@ -1447,7 +1538,7 @@ function paraDeVigiar(){ mascotePensa(false); if(_paradaT){clearTimeout(_paradaT
 document.addEventListener("pointerdown", function(){ if(_paradaT) acordaParada(); }, true);
 document.addEventListener("keydown", function(){ if(_paradaT) acordaParada(); }, true);
 function tiraDica(){ var d=document.getElementById("dicabox"); if(d&&d.parentNode) d.parentNode.removeChild(d); }
-function limpa(){ telaNarrou=false;
+function limpa(){ __qa("tela"); telaNarrou=false;
   /* ⚠️⚠️ LICAO PAGA (ago/2026), pega pelo Marcos com a turma jogando:
      *"tem audio falando da fase anterior, nos botoes de audio"*.
 
@@ -1599,7 +1690,7 @@ function poeVitrine(t, feitas){
      nao dispara na 1a pintura) */
   setTimeout(function(){ if(fill&&fill.parentNode){ fill.style.width=pct+"%"; } },40);
 }
-function mostraBanner(msg,cb){
+function mostraBanner(msg,cb){ __qa("botao");
   /* ⚠️⚠️ LICAO PAGA (Teatro, ago/2026, o Marcos jogando): uma fase fechava com
      um "QUADRADO GRANDE desconfigurado" no lugar do aviso fininho. Causa: varias
      pecas (pintar, pintar-canvas, memoria, sete-erros, achar-na-cena,
@@ -2713,11 +2804,7 @@ setTimeout(inicia, 0);
    baguncar, sCerto, sErro, sTap, festa) o motor ja tem com o MESMO nome E o
    mesmo tipo — e por isso a peca nunca precisou ser reescrita. */
 function nota(f, dur, vol, tipo, atraso){
-  /* ⚠️ LICAO PAGA (set/2026, no Museu): `nota` e chamada de dentro da MONTAGEM
-     da fase (sPista -> nota -> arma). Sem guarda aqui, um `arma()` que tropeca
-     num PC com audio bloqueado matava a fase INTEIRA — a crianca abria e via
-     tela vazia, nem chegava a tentar. Som e enfeite: nunca derruba o app. */
-  try{ if(typeof arma === "function") arma(); }catch(_a){}
+  if(typeof arma === "function") arma();
   var c = window.ac; if(!c || !c.createOscillator) return;
   try{
     var o = c.createOscillator(), g = c.createGain(), t = c.currentTime + (atraso||0);
@@ -2818,15 +2905,7 @@ MEC["pintar-canvas"] = function(f, cen, fim){
        botao. A peca continua so avisando que acabou; quem manda no caminho
        segue sendo o motor — mas com a comemoracao no meio. */
     function mostraBanner(msg, cb){
-      /* ⚠️⚠️ LICAO PAGA (Marcos, set/2026): a festa rodava ANTES de chamar o
-         banner, e SEM guarda. Se o confete tropecasse num PC (canvas ausente,
-         audio bloqueado), a excecao matava a funcao AQUI — e o
-         `window.mostraBanner` logo abaixo NUNCA era chamado. A crianca ficava
-         com a fase toda resolvida e SEM o botao de proximo, presa no meio da
-         aula. Foi assim que apareceu nas fases de ligar do Trem.
-         Enfeite nunca pode impedir a crianca de avancar: agora ele nao derruba
-         mais o caminho. */
-      try{ if(typeof festa === "function") festa(); }catch(_f){}
+      if(typeof festa === "function") festa();
       /* ⚠️⚠️ LICAO PAGA (Teatro, ago/2026), o Marcos jogando: uma fase fechava
          com um "QUADRADO GRANDE desconfigurado" em vez do aviso fininho das
          outras. Causa: 7 pecas (pintar, pintar-canvas, memoria, sete-erros,
@@ -3108,6 +3187,7 @@ ABERTURA = {texto:"Bem-vindo ao ateliê da Rai! Aqui não tem certo nem errado: 
 FASES = [{"id": "f_p1", "mec": "pintar-canvas", "selo": "HORA DE PINTAR", "enunciado": "Pinte o sol do jeito que você quiser.", "conceito": "objetivo1", "dica": "Toque numa cor e depois toque no desenho. Pode trocar quantas vezes quiser.", "dados": [{"selo": "HORA DE PINTAR", "nome": "o sol", "voz": "o sol", "img": "co_pg1"}], "dadosExtra": {"TINTAS": [{"c": "#e53935", "n": "vermelho"}, {"c": "#fb8c00", "n": "laranja"}, {"c": "#fdd835", "n": "amarelo"}, {"c": "#43a047", "n": "verde"}, {"c": "#1e88e5", "n": "azul"}, {"c": "#8e24aa", "n": "roxo"}, {"c": "#ec407a", "n": "rosa"}, {"c": "#8d6e63", "n": "marrom"}, {"c": "#333333", "n": "preto"}, {"c": "#ffffff", "n": "branco"}]}, "vozIntro": "co_f_p1_intro", "dicaVoz": "co_f_p1_dica"}, {"id": "f_p2", "mec": "pintar-canvas", "selo": "HORA DE PINTAR", "enunciado": "Pinte o peixinho do jeito que você quiser.", "conceito": "objetivo1", "dica": "Toque numa cor e depois toque no desenho. Pode trocar quantas vezes quiser.", "dados": [{"selo": "HORA DE PINTAR", "nome": "o peixinho", "voz": "o peixinho", "img": "co_pg2"}], "dadosExtra": {"TINTAS": [{"c": "#e53935", "n": "vermelho"}, {"c": "#fb8c00", "n": "laranja"}, {"c": "#fdd835", "n": "amarelo"}, {"c": "#43a047", "n": "verde"}, {"c": "#1e88e5", "n": "azul"}, {"c": "#8e24aa", "n": "roxo"}, {"c": "#ec407a", "n": "rosa"}, {"c": "#8d6e63", "n": "marrom"}, {"c": "#333333", "n": "preto"}, {"c": "#ffffff", "n": "branco"}]}, "vozIntro": "co_f_p2_intro", "dicaVoz": "co_f_p2_dica"}, {"id": "f_p3", "mec": "pintar-canvas", "selo": "HORA DE PINTAR", "enunciado": "Pinte a borboleta do jeito que você quiser.", "conceito": "objetivo1", "dica": "Toque numa cor e depois toque no desenho. Pode trocar quantas vezes quiser.", "dados": [{"selo": "HORA DE PINTAR", "nome": "a borboleta", "voz": "a borboleta", "img": "co_pg3"}], "dadosExtra": {"TINTAS": [{"c": "#e53935", "n": "vermelho"}, {"c": "#fb8c00", "n": "laranja"}, {"c": "#fdd835", "n": "amarelo"}, {"c": "#43a047", "n": "verde"}, {"c": "#1e88e5", "n": "azul"}, {"c": "#8e24aa", "n": "roxo"}, {"c": "#ec407a", "n": "rosa"}, {"c": "#8d6e63", "n": "marrom"}, {"c": "#333333", "n": "preto"}, {"c": "#ffffff", "n": "branco"}]}, "vozIntro": "co_f_p3_intro", "dicaVoz": "co_f_p3_dica"}, {"id": "f_p4", "mec": "pintar-canvas", "selo": "HORA DE PINTAR", "enunciado": "Pinte a flor do jeito que você quiser.", "conceito": "objetivo2", "dica": "Toque numa cor e depois toque no desenho. Pode trocar quantas vezes quiser.", "dados": [{"selo": "HORA DE PINTAR", "nome": "a flor", "voz": "a flor", "img": "co_pg4"}], "dadosExtra": {"TINTAS": [{"c": "#e53935", "n": "vermelho"}, {"c": "#fb8c00", "n": "laranja"}, {"c": "#fdd835", "n": "amarelo"}, {"c": "#43a047", "n": "verde"}, {"c": "#1e88e5", "n": "azul"}, {"c": "#8e24aa", "n": "roxo"}, {"c": "#ec407a", "n": "rosa"}, {"c": "#8d6e63", "n": "marrom"}, {"c": "#333333", "n": "preto"}, {"c": "#ffffff", "n": "branco"}]}, "vozIntro": "co_f_p4_intro", "dicaVoz": "co_f_p4_dica"}, {"id": "f_p5", "mec": "pintar-canvas", "selo": "HORA DE PINTAR", "enunciado": "Pinte o gatinho do jeito que você quiser.", "conceito": "objetivo2", "dica": "Toque numa cor e depois toque no desenho. Pode trocar quantas vezes quiser.", "dados": [{"selo": "HORA DE PINTAR", "nome": "o gatinho", "voz": "o gatinho", "img": "co_pg5"}], "dadosExtra": {"TINTAS": [{"c": "#e53935", "n": "vermelho"}, {"c": "#fb8c00", "n": "laranja"}, {"c": "#fdd835", "n": "amarelo"}, {"c": "#43a047", "n": "verde"}, {"c": "#1e88e5", "n": "azul"}, {"c": "#8e24aa", "n": "roxo"}, {"c": "#ec407a", "n": "rosa"}, {"c": "#8d6e63", "n": "marrom"}, {"c": "#333333", "n": "preto"}, {"c": "#ffffff", "n": "branco"}]}, "vozIntro": "co_f_p5_intro", "dicaVoz": "co_f_p5_dica"}, {"id": "f_p6", "mec": "pintar-canvas", "selo": "HORA DE PINTAR", "enunciado": "Pinte a casinha do jeito que você quiser.", "conceito": "objetivo2", "dica": "Toque numa cor e depois toque no desenho. Pode trocar quantas vezes quiser.", "dados": [{"selo": "HORA DE PINTAR", "nome": "a casinha", "voz": "a casinha", "img": "co_pg6"}], "dadosExtra": {"TINTAS": [{"c": "#e53935", "n": "vermelho"}, {"c": "#fb8c00", "n": "laranja"}, {"c": "#fdd835", "n": "amarelo"}, {"c": "#43a047", "n": "verde"}, {"c": "#1e88e5", "n": "azul"}, {"c": "#8e24aa", "n": "roxo"}, {"c": "#ec407a", "n": "rosa"}, {"c": "#8d6e63", "n": "marrom"}, {"c": "#333333", "n": "preto"}, {"c": "#ffffff", "n": "branco"}]}, "vozIntro": "co_f_p6_intro", "dicaVoz": "co_f_p6_dica"}, {"id": "f_p7", "mec": "pintar-canvas", "selo": "HORA DE PINTAR", "enunciado": "Pinte o patinho do jeito que você quiser.", "conceito": "objetivo3", "dica": "Toque numa cor e depois toque no desenho. Pode trocar quantas vezes quiser.", "dados": [{"selo": "HORA DE PINTAR", "nome": "o patinho", "voz": "o patinho", "img": "co_pg7"}], "dadosExtra": {"TINTAS": [{"c": "#e53935", "n": "vermelho"}, {"c": "#fb8c00", "n": "laranja"}, {"c": "#fdd835", "n": "amarelo"}, {"c": "#43a047", "n": "verde"}, {"c": "#1e88e5", "n": "azul"}, {"c": "#8e24aa", "n": "roxo"}, {"c": "#ec407a", "n": "rosa"}, {"c": "#8d6e63", "n": "marrom"}, {"c": "#333333", "n": "preto"}, {"c": "#ffffff", "n": "branco"}]}, "vozIntro": "co_f_p7_intro", "dicaVoz": "co_f_p7_dica"}, {"id": "f_p8", "mec": "pintar-canvas", "selo": "HORA DE PINTAR", "enunciado": "Pinte o balão do jeito que você quiser.", "conceito": "objetivo3", "dica": "Toque numa cor e depois toque no desenho. Pode trocar quantas vezes quiser.", "dados": [{"selo": "HORA DE PINTAR", "nome": "o balão", "voz": "o balão", "img": "co_pg8"}], "dadosExtra": {"TINTAS": [{"c": "#e53935", "n": "vermelho"}, {"c": "#fb8c00", "n": "laranja"}, {"c": "#fdd835", "n": "amarelo"}, {"c": "#43a047", "n": "verde"}, {"c": "#1e88e5", "n": "azul"}, {"c": "#8e24aa", "n": "roxo"}, {"c": "#ec407a", "n": "rosa"}, {"c": "#8d6e63", "n": "marrom"}, {"c": "#333333", "n": "preto"}, {"c": "#ffffff", "n": "branco"}]}, "vozIntro": "co_f_p8_intro", "dicaVoz": "co_f_p8_dica"}];
 AMBI = "poeira";
 VOZOK = {"1hmuuva": 1, "4f07c2": 1, "1mfu9s7": 1, "steoe6": 1, "eeq97q": 1, "4lf8yj": 1, "yke0n5": 1, "ykquvh": 1, "ykquqi": 1, "3o8hzn": 1, "4hggjz": 1, "1vwola2": 1, "hh5p3s": 1, "dn270g": 1, "1tnlad5": 1, "1q298f2": 1, "lc1v0d": 1, "1572u1z": 1, "1eibgxh": 1};
+AUDIOS = ["co_abertura", "co_f_p1_intro", "co_f_p1_dica", "op_1hmuuva", "op_4f07c2", "op_1mfu9s7", "op_steoe6", "op_eeq97q", "op_4lf8yj", "op_yke0n5", "op_ykquvh", "op_ykquqi", "op_3o8hzn", "op_4hggjz", "op_1vwola2", "co_f_p2_intro", "co_f_p2_dica", "op_hh5p3s", "co_f_p3_intro", "co_f_p3_dica", "op_dn270g", "co_f_p4_intro", "co_f_p4_dica", "op_1tnlad5", "co_f_p5_intro", "co_f_p5_dica", "op_1q298f2", "co_f_p6_intro", "co_f_p6_dica", "op_lc1v0d", "co_f_p7_intro", "co_f_p7_dica", "op_1572u1z", "co_f_p8_intro", "co_f_p8_dica", "op_1eibgxh", "co_fim"];
 RELBNCC = "";
 </script>
 </body></html>
